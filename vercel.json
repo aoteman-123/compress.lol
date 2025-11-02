@@ -2,9 +2,6 @@
 	"github": {
 		"silent": true
 	},
-	"vercel": {
-		"cleanUrls": true
-	},
 	"headers": [
 		{
 			"source": "/(.*)",
