@@ -23,7 +23,7 @@
 		value: number;
 	}
 
-	// State Variables
+	// State
 	let ffmpeg = $state<FFmpeg>();
 	let isLoaded = $state(false);
 	let loadPromise = $state<Promise<void> | null>(null);
@@ -46,7 +46,7 @@
 	let selectedTarget = $state(compressionTargets[1]);
 
 	onMount(() => {
-		// Start loading the heavy WASM engine silently in background
+		// Start engine load silently
 		loadPromise = initFFmpeg();
 	});
 
@@ -54,9 +54,14 @@
 		try {
 			ffmpeg = new FFmpeg();
 			ffmpeg.on('progress', ({ progress: prog }: ProgressEvent) => {
-				// We allocate 15%-100% of the progress bar to actual FFmpeg task
+				// Scale real progress from 15% to 100%
 				progress = 15 + Math.round(prog * 85);
 			});
+			// Listen for logs to catch potential errors early
+			ffmpeg.on('log', ({ message }) => {
+				if (message.includes('Error')) console.warn('FFmpeg Log:', message);
+			});
+
 			await ffmpeg.load({
 				coreURL: await toBlobURL(`ffmpeg/ffmpeg-core.js`, 'text/javascript'),
 				wasmURL: await toBlobURL(`ffmpeg/ffmpeg-core.wasm`, 'application/wasm'),
@@ -64,8 +69,8 @@
 			});
 			isLoaded = true;
 		} catch (error) {
-			console.error(error);
-			errorMessage = 'Hardware acceleration is disabled or unsupported in this browser.';
+			console.error('WASM Load Fail:', error);
+			errorMessage = 'Engine failed to start. Please use a modern browser like Chrome.';
 		}
 	};
 
@@ -78,7 +83,6 @@
 			processedVideo = null;
 			errorMessage = '';
 
-			// Quick metadata check using native browser video element
 			const v = document.createElement('video');
 			v.src = URL.createObjectURL(file);
 			v.onloadedmetadata = () => {
@@ -96,46 +100,58 @@
 		statusMessage = 'Analyzing video structure...';
 
 		try {
-			// Phase 1: Fake progress if WASM is still downloading
+			// Fake progress while waiting for JS/WASM loading
 			if (!isLoaded && loadPromise) {
 				const interval = setInterval(() => {
 					if (progress < 14) progress += 1;
-				}, 600);
+				}, 700);
 				await loadPromise;
 				clearInterval(interval);
 			}
 
-			if (!ffmpeg) throw new Error('Engine failed');
+			if (!ffmpeg) throw new Error('FFmpeg not ready');
 
-			// Phase 2: Start real FFmpeg processing
 			progress = 15;
-			statusMessage = 'Optimizing bitrate for Discord...';
+			statusMessage = 'Optimizing frames for Discord...';
 
-			const inputName = 'input_video';
+			const inputName = 'input_file';
+			const outputName = 'output.mp4';
+
+			// Clean up previous files if any
+			try { await ffmpeg.deleteFile(outputName); } catch(e) {}
+
 			await ffmpeg.writeFile(inputName, await fetchFile(selectedFile));
 
-			// Calculate bitrate to hit the target size (Target / Duration * Safety Factor)
-			const targetBitrateKbps = Math.floor(((selectedTarget.value * 8) / (videoDuration || 10) / 1000) * 0.88);
-			const vBitrate = Math.max(100, targetBitrateKbps - 128); // Reserve 128k for audio
+			// Bitrate Calculation with 12% safety margin
+			const targetBitrateKbps = Math.floor(((selectedTarget.value * 8) / (videoDuration || 1) / 1000) * 0.88);
+			const videoBitrate = Math.max(150, targetBitrateKbps - 128);
 
+			// Core Command: Optimized for browser WASM limits
 			await ffmpeg.exec([
 				'-i', inputName,
 				'-c:v', 'libx264',
-				'-b:v', `${vBitrate}k`,
-				'-preset', 'ultrafast',
-				'-vf', 'scale=iw*min(1\\,1280/iw):-2', // Ensure max 720p for Discord preview
+				'-b:v', `${videoBitrate}k`,
+				'-preset', 'ultrafast', // Crucial for preventing WASM crashes
+				'-profile:v', 'baseline', // Best compatibility for Discord mobile
+				'-level', '3.0',
+				'-vf', 'scale=iw*min(1\\,1280/iw):-2,format=yuv420p',
 				'-c:a', 'aac',
 				'-b:a', '128k',
+				'-ac', '2',
 				'-movflags', '+faststart',
-				'output.mp4'
+				outputName
 			]);
 
-			const data = (await ffmpeg.readFile('output.mp4')) as Uint8Array;
+			const data = (await ffmpeg.readFile(outputName)) as Uint8Array;
 			processedVideo = data;
 			compressedSize = data.length;
-			statusMessage = 'Finished!';
+			statusMessage = 'Successfully Optimized!';
+
+			// Auto cleanup
+			await ffmpeg.deleteFile(inputName);
 		} catch (e) {
-			errorMessage = 'Processing failed. Your file may be corrupted or too complex.';
+			console.error('Task Error:', e);
+			errorMessage = 'Optimization failed. Try a smaller file or a different browser tab.';
 		} finally {
 			isProcessing = false;
 		}
@@ -147,191 +163,198 @@
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 		a.href = url;
-		a.download = `discord_ready_${selectedFile?.name || 'video.mp4'}`;
+		a.download = `Discord_${selectedTarget.label}_${selectedFile?.name || 'video.mp4'}`;
 		a.click();
+		URL.revokeObjectURL(url);
 	};
 </script>
 
 <svelte:head>
-	<title>Discord Video Compressor - Compress to 8MB / 25MB for Free</title>
-	<meta name="description" content="Fast, private online video compressor for Discord. Reduce your video size to 8MB or 25MB instantly in your browser. No uploads, 100% secure." />
-	<meta name="keywords" content="discord compressor, video compressor 8mb, compress video for discord, 25mb video compressor, discord nitro video size" />
-
-	<meta property="og:title" content="Discord Video Compressor" />
-	<meta property="og:description" content="Fit your videos into Discord's upload limit without losing quality." />
-	<meta property="og:type" content="website" />
+	<title>Discord Video Compressor - Resize MP4 to 8MB/25MB Online</title>
+	<meta name="description" content="Free and private Discord video compressor. Shrink your videos to 8MB, 25MB or 50MB directly in your browser. No uploads, no storage, pure privacy." />
+	<meta name="keywords" content="discord compressor, video compressor 8mb, 25mb video reducer, nitro video compressor, online video resizer discord" />
 </svelte:head>
 
-<div class="min-h-screen bg-background flex flex-col items-center p-4 md:p-10">
-	<header class="w-full max-w-5xl flex justify-between items-center mb-16">
+<div class="min-h-screen bg-slate-50 text-slate-900 flex flex-col items-center p-4 md:p-12 font-sans">
+	<header class="w-full max-w-4xl flex justify-between items-center mb-16">
 		<div class="flex items-center gap-2">
-			<Zap class="text-primary h-8 w-8 fill-primary" />
-			<h1 class="text-2xl font-extrabold tracking-tighter">DISCORD COMPRESSOR</h1>
+			<div class="bg-indigo-600 p-2 rounded-xl shadow-lg">
+				<Zap class="text-white h-6 w-6 fill-white" />
+			</div>
+			<h1 class="text-xl font-black tracking-tighter">DISCORD COMPRESSOR</h1>
 		</div>
 		<ThemeSelector />
 	</header>
 
-	<main class="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-12 gap-10">
-		<div class="lg:col-span-7 space-y-8">
-			<Card.Root class="border-2 shadow-xl overflow-hidden">
-				<Card.Header class="bg-accent/30">
-					<Card.Title>Video Optimizer</Card.Title>
-					<p class="text-sm text-muted-foreground">Select a file to begin the compression process.</p>
+	<main class="w-full max-w-4xl grid grid-cols-1 lg:grid-cols-12 gap-12">
+		<div class="lg:col-span-7 space-y-6">
+			<Card.Root class="border-none shadow-2xl bg-white overflow-hidden rounded-3xl">
+				<Card.Header class="pb-2">
+					<Card.Title class="text-2xl font-bold">Compress Video</Card.Title>
+					<p class="text-sm text-slate-400 font-medium tracking-tight">Fits any video into Discord's limits.</p>
 				</Card.Header>
-				<Card.Content class="p-8 space-y-6">
-					<div class="relative group">
+				<Card.Content class="p-8 space-y-8">
+					<div class="relative">
 						<input
 							type="file"
 							accept="video/*"
 							onchange={handleFileSelect}
 							class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
 						/>
-						<div class="border-2 border-dashed rounded-xl py-12 text-center transition-all group-hover:border-primary group-hover:bg-primary/5">
+						<div class="border-2 border-dashed border-slate-200 rounded-2xl py-14 text-center transition-all hover:bg-indigo-50 hover:border-indigo-300">
 							{#if selectedFile}
-								<p class="font-bold text-primary truncate px-4">{selectedFile.name}</p>
-								<p class="text-xs text-muted-foreground mt-2">Original: {(originalSize / 1024 / 1024).toFixed(2)} MB</p>
+								<div class="px-4">
+									<p class="font-bold text-indigo-600 truncate">{selectedFile.name}</p>
+									<p class="text-xs text-slate-400 mt-1 uppercase font-bold tracking-widest">
+										Original: {(originalSize / 1024 / 1024).toFixed(2)} MB
+									</p>
+								</div>
 							{:else}
-								<p class="text-lg font-bold">Select or Drop Video</p>
-								<p class="text-sm text-muted-foreground">MP4, MOV, WebM (Max 500MB)</p>
+								<div class="space-y-2">
+									<div class="mx-auto w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center mb-4">
+										<ShieldCheck class="text-indigo-600 w-6 h-6" />
+									</div>
+									<p class="text-lg font-bold">Upload Video</p>
+									<p class="text-xs text-slate-400 font-medium">MP4, MOV, WEBM (UP TO 500MB)</p>
+								</div>
 							{/if}
 						</div>
 					</div>
 
-					<div class="flex flex-col sm:flex-row gap-4">
-						<div class="flex-1 space-y-2">
-							<Label>Discord Target Limit</Label>
+					<div class="space-y-4">
+						<div class="space-y-2">
+							<Label class="text-xs font-bold uppercase text-slate-400">Target File Size</Label>
 							<Select.Root type="single" value={selectedTargetValue} onValueChange={(v) => {
 								selectedTargetValue = v || '25 MB';
 								selectedTarget = compressionTargets.find(t => t.label === v) || compressionTargets[1];
 							}}>
-								<Select.Trigger class="w-full">{selectedTargetValue}</Select.Trigger>
+								<Select.Trigger class="w-full h-12 rounded-xl font-bold">{selectedTargetValue}</Select.Trigger>
 								<Select.Content>
 									{#each compressionTargets as t}
-										<Select.Item value={t.label}>{t.label}</Select.Item>
+										<Select.Item value={t.label} class="font-medium">{t.label}</Select.Item>
 									{/each}
 								</Select.Content>
 							</Select.Root>
 						</div>
-						<div class="flex items-end sm:w-48">
-							<Button
-								onclick={compressVideo}
-								disabled={!selectedFile || isProcessing}
-								class="w-full font-bold h-10 shadow-lg"
-							>
-								{#if isProcessing}
-									<Loader class="mr-2 h-4 w-4 animate-spin" />
-									{progress}%
-								{:else}
-									Compress
-								{/if}
-							</Button>
-						</div>
+
+						<Button
+							onclick={compressVideo}
+							disabled={!selectedFile || isProcessing}
+							class="w-full font-black h-14 rounded-2xl text-lg shadow-indigo-200 shadow-xl transition-transform active:scale-95 bg-indigo-600 hover:bg-indigo-700"
+						>
+							{#if isProcessing}
+								<Loader class="mr-2 h-5 w-5 animate-spin" />
+								{progress}%
+							{:else}
+								START COMPRESSION
+							{/if}
+						</Button>
 					</div>
 
 					{#if isProcessing}
-						<div class="space-y-3">
-							<Progress value={progress} class="h-2.5" />
-							<p class="text-xs text-center font-medium animate-pulse uppercase tracking-widest text-muted-foreground">
+						<div class="space-y-3 pt-2">
+							<Progress value={progress} class="h-2 rounded-full bg-slate-100" />
+							<p class="text-[10px] text-center font-black animate-pulse uppercase tracking-[0.2em] text-indigo-400">
 								{statusMessage}
 							</p>
 						</div>
 					{/if}
 
 					{#if errorMessage}
-						<Alert.Root variant="destructive">
-							<Alert.Description>{errorMessage}</Alert.Description>
+						<Alert.Root variant="destructive" class="rounded-xl border-none bg-red-50 text-red-600">
+							<Alert.Description class="font-bold text-xs">{errorMessage}</Alert.Description>
 						</Alert.Root>
 					{/if}
 				</Card.Content>
 			</Card.Root>
 
 			{#if processedVideo}
-				<Card.Root class="border-primary/40 border-2 bg-primary/5">
-					<Card.Content class="p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-						<div class="text-center sm:text-left">
-							<Badge variant="outline" class="mb-1">Ready for Upload</Badge>
-							<p class="text-lg font-black">Size: {(compressedSize / 1024 / 1024).toFixed(2)} MB</p>
-						</div>
-						<Button onclick={downloadVideo} size="lg" class="w-full sm:w-auto px-8 bg-green-600 hover:bg-green-700">
-							Download MP4
-						</Button>
-					</Card.Content>
-				</Card.Root>
+				<div class="bg-emerald-50 border-2 border-emerald-100 p-6 rounded-3xl flex items-center justify-between animate-in fade-in slide-in-from-bottom-4">
+					<div>
+						<p class="text-xs font-black text-emerald-600 uppercase tracking-widest mb-1">Compression Result</p>
+						<p class="text-2xl font-black text-emerald-900">{(compressedSize / 1024 / 1024).toFixed(2)} MB</p>
+					</div>
+					<Button onclick={downloadVideo} size="lg" class="rounded-2xl px-10 bg-emerald-600 hover:bg-emerald-700 font-bold shadow-lg shadow-emerald-100">
+						DOWNLOAD
+					</Button>
+				</div>
 			{/if}
 		</div>
 
-		<div class="lg:col-span-5 space-y-8">
-			<div class="bg-card border-2 p-6 rounded-2xl shadow-sm space-y-4">
-				<div class="flex items-center gap-3">
-					<ShieldCheck class="text-green-500 h-6 w-6" />
-					<h3 class="font-bold text-lg">Local Processing</h3>
+		<div class="lg:col-span-5 space-y-10">
+			<section class="space-y-4">
+				<h3 class="text-sm font-black uppercase tracking-widest text-indigo-600">Why choose us?</h3>
+				<div class="grid gap-4">
+					<div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+						<p class="font-bold text-slate-800 text-sm mb-1">Total Privacy</p>
+						<p class="text-xs text-slate-400 leading-relaxed">Videos are processed locally in your RAM. Your files never leave your device.</p>
+					</div>
+					<div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+						<p class="font-bold text-slate-800 text-sm mb-1">No File Limits</p>
+						<p class="text-xs text-slate-400 leading-relaxed">Compress large files for Discord Nitro or fit them into the 25MB standard limit.</p>
+					</div>
 				</div>
-				<p class="text-sm text-muted-foreground leading-relaxed">
-					Unlike other websites, we don't upload your videos to a server. All compression happens <strong>inside your browser</strong>. Your privacy is guaranteed because your data never leaves your computer.
-				</p>
-			</div>
+			</section>
 
-			<div class="p-6 rounded-2xl border-2 space-y-4">
-				<h3 class="font-bold text-lg">Discord Upload Limits</h3>
-				<div class="space-y-2 text-sm">
-					<div class="flex justify-between border-b pb-2">
-						<span class="text-muted-foreground">Free Users</span>
-						<span class="font-mono font-bold">25 MB</span>
+			<section class="bg-indigo-600 rounded-3xl p-8 text-white shadow-xl shadow-indigo-100">
+				<h3 class="font-black text-xl mb-4 italic uppercase tracking-tighter">Discord Limits 2025</h3>
+				<div class="space-y-4 font-bold text-sm">
+					<div class="flex justify-between border-b border-indigo-500 pb-2">
+						<span class="opacity-80">Free / Standard</span>
+						<span>25 MB</span>
 					</div>
-					<div class="flex justify-between border-b pb-2">
-						<span class="text-muted-foreground">Nitro Basic</span>
-						<span class="font-mono font-bold">50 MB</span>
+					<div class="flex justify-between border-b border-indigo-500 pb-2">
+						<span class="opacity-80">Nitro Basic</span>
+						<span>50 MB</span>
 					</div>
-					<div class="flex justify-between border-b pb-2">
-						<span class="text-muted-foreground">Nitro Pro</span>
-						<span class="font-mono font-bold">500 MB</span>
+					<div class="flex justify-between">
+						<span class="opacity-80">Nitro Pro</span>
+						<span>500 MB</span>
 					</div>
 				</div>
-			</div>
+			</section>
 		</div>
 	</main>
 
-	<section class="w-full max-w-5xl mt-24 pb-20">
-		<h2 class="text-3xl font-black mb-12 text-center tracking-tight italic">FREQUENTLY ASKED QUESTIONS</h2>
+	<section class="w-full max-w-4xl mt-32 space-y-16 border-t border-slate-200 pt-20">
+		<h2 class="text-4xl font-black text-center tracking-tighter italic">FAQ</h2>
 
-		<div class="grid grid-cols-1 md:grid-cols-2 gap-10 text-left">
+		<div class="grid grid-cols-1 md:grid-cols-2 gap-12">
 			<div class="space-y-3">
-				<h4 class="font-bold text-primary">How to compress a video for Discord to 8MB?</h4>
-				<p class="text-sm text-muted-foreground">
-					Simply select the "8 MB" option in our tool. Our algorithm will automatically adjust the bitrate and scale to ensure the final output is under the legacy Discord limit while preserving as much quality as possible.
+				<h4 class="font-black text-indigo-600 uppercase text-xs tracking-widest">How to compress video to 8MB?</h4>
+				<p class="text-sm text-slate-500 leading-relaxed font-medium">
+					Discord recently increased the limit to 25MB, but some servers still prefer smaller files. Select "8 MB" in our settings, and we'll handle the complex calculations to make it fit perfectly.
 				</p>
 			</div>
-
 			<div class="space-y-3">
-				<h4 class="font-bold text-primary">Is this Discord compressor safe?</h4>
-				<p class="text-sm text-muted-foreground">
-					Yes, it is safer than most. Since we use FFmpeg.WASM, the video file is processed locally on your machine. We never see your files, and no data is sent to our servers.
+				<h4 class="font-black text-indigo-600 uppercase text-xs tracking-widest">Why is my file still too big?</h4>
+				<p class="text-sm text-slate-500 leading-relaxed font-medium">
+					If the video is extremely long, even high compression might struggle. We suggest trimming videos to under 3 minutes for the best results on Discord.
 				</p>
 			</div>
-
 			<div class="space-y-3">
-				<h4 class="font-bold text-primary">Why is the processing speed slow?</h4>
-				<p class="text-sm text-muted-foreground">
-					Because compression happens in your browser, it depends on your CPU power. If it's taking too long, try closing other browser tabs or using a device with a faster processor.
+				<h4 class="font-black text-indigo-600 uppercase text-xs tracking-widest">Does it work on Mobile?</h4>
+				<p class="text-sm text-slate-500 leading-relaxed font-medium">
+					Yes! Our tool works on Chrome and Safari for iOS and Android. It uses your phone's processor to compress videos on-the-go.
 				</p>
 			</div>
-
 			<div class="space-y-3">
-				<h4 class="font-bold text-primary">Which formats are supported?</h4>
-				<p class="text-sm text-muted-foreground">
-					We support MP4, MOV, WEBM, and AVI. The output is always an MP4 file using the H.264 codec, which is guaranteed to be playable directly within the Discord chat window on both mobile and desktop.
+				<h4 class="font-black text-indigo-600 uppercase text-xs tracking-widest">Is it really free?</h4>
+				<p class="text-sm text-slate-500 leading-relaxed font-medium">
+					Absolutely. There are no subscriptions or hidden fees. We don't even have servers to store your videos, which keeps our costs low and your data safe.
 				</p>
 			</div>
 		</div>
 	</section>
 
-	<footer class="mt-auto py-8 text-center text-xs text-muted-foreground border-t w-full max-w-5xl">
-		<p>© 2025 DiscordCompressor.com | Fast & Secure Browser-Side Video Tools</p>
+	<footer class="mt-32 pb-12 text-center text-[10px] font-bold uppercase tracking-[0.3em] text-slate-300">
+		© 2025 DiscordCompressor.com | Browser-Based Optimization
 	</footer>
 </div>
 
 <style>
 	:global(html) {
 		scroll-behavior: smooth;
+		background-color: #f8fafc;
 	}
 </style>
