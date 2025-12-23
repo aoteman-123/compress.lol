@@ -24,10 +24,9 @@
        value: number;
     }
 
-    // State
-    let ffmpeg = $state<FFmpeg>();
+    // State - Using Svelte 5 Runes
+    let ffmpeg = $state<FFmpeg | null>(null);
     let isLoaded = $state(false);
-    let loadPromise = $state<Promise<void> | null>(null);
     let isProcessing = $state(false);
     let progress = $state(0);
     let selectedFile = $state<File | null>(null);
@@ -35,9 +34,8 @@
     let originalSize = $state(0);
     let compressedSize = $state(0);
     let errorMessage = $state('');
-    let statusMessage = $state('Initializing Engine...');
+    let statusMessage = $state('Ready to optimize');
     let videoDuration = $state(0);
-    let isSecureContext = $state(true);
 
     const compressionTargets: CompressionTarget[] = [
        { label: '8 MB', value: 8 * 1024 * 1024 },
@@ -45,32 +43,46 @@
        { label: '50 MB', value: 50 * 1024 * 1024 }
     ];
     let selectedTargetValue = $state('25 MB');
-    let selectedTarget = $state(compressionTargets[1]);
+    let selectedTarget = $derived(compressionTargets.find(t => t.label === selectedTargetValue) || compressionTargets[1]);
 
     onMount(() => {
-       // Mobile Error Prevention: Check for SharedArrayBuffer (COOP/COEP headers)
-       if (typeof SharedArrayBuffer === 'undefined') {
-          isSecureContext = false;
-          errorMessage = "Mobile Error: Your browser doesn't support multithreading. Please use Chrome/Safari and ensure COOP/COEP headers are set.";
-       }
-       loadPromise = initFFmpeg();
+        initFFmpeg();
     });
 
-    const initFFmpeg = async (): Promise<void> => {
+    const initFFmpeg = async () => {
        try {
+          // Check for SharedArrayBuffer - the #1 cause of Web/Mobile errors
+          if (typeof SharedArrayBuffer === 'undefined') {
+             console.error("SharedArrayBuffer not available.");
+             errorMessage = "Security Error: Cross-Origin Isolation is not enabled. If you are developing locally, Vite needs specific headers. If deployed, check COOP/COEP headers.";
+             return;
+          }
+
           ffmpeg = new FFmpeg();
-          ffmpeg.on('progress', ({ progress: prog }: ProgressEvent) => {
-             progress = 15 + Math.round(prog * 85);
+
+          // Log listener for debugging
+          ffmpeg.on('log', ({ message }) => {
+              console.log('FFmpeg:', message);
           });
 
-          await ffmpeg.load({
-             coreURL: await toBlobURL(`/ffmpeg-core.js`, 'text/javascript'),
-             wasmURL: await toBlobURL(`/ffmpeg-core.wasm`, 'application/wasm'),
+          ffmpeg.on('progress', ({ progress: prog }: ProgressEvent) => {
+             // Progress is 0 to 1, convert to 1-100
+             progress = Math.round(prog * 100);
           });
+
+          // Use unpkg as a fallback if local files in /static/ are missing
+          const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
+
+          await ffmpeg.load({
+             coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+             wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+          });
+
           isLoaded = true;
-       } catch (error) {
-          console.error('FFmpeg Load Fail:', error);
-          errorMessage = 'Engine failed to start. Mobile browsers require the latest version and HTTPS.';
+          statusMessage = 'Engine loaded successfully';
+       } catch (error: any) {
+          console.error('Initialization Error:', error);
+          errorMessage = `Failed to load FFmpeg: ${error.message || 'Unknown error'}`;
        }
     };
 
@@ -93,25 +105,23 @@
     };
 
     const compressVideo = async () => {
-       if (!selectedFile || !ffmpeg) return;
+       if (!selectedFile || !ffmpeg || !isLoaded) return;
        isProcessing = true;
-       progress = 1;
+       progress = 0;
        errorMessage = '';
-       statusMessage = 'Analyzing structure...';
+       statusMessage = 'Analyzing file...';
 
        try {
-          if (!isLoaded && loadPromise) await loadPromise;
-
           const inputName = 'input.mp4';
           const outputName = 'output.mp4';
 
           await ffmpeg.writeFile(inputName, await fetchFile(selectedFile));
 
-          // Safety margin for Discord (12%)
+          // Bitrate logic for Discord
           const targetBitrateKbps = Math.floor(((selectedTarget.value * 8) / (videoDuration || 1) / 1000) * 0.88);
           const videoBitrate = Math.max(120, targetBitrateKbps - 64);
 
-          statusMessage = 'Compressing for Discord...';
+          statusMessage = 'Compressing...';
 
           await ffmpeg.exec([
              '-i', inputName,
@@ -120,7 +130,7 @@
              '-preset', 'ultrafast',
              '-profile:v', 'baseline',
              '-level', '3.0',
-             // Mobile stability: Downscale to max 720p
+             // Downscale to 720p for mobile stability
              '-vf', 'scale=iw*min(1\\,720/iw):-2,format=yuv420p',
              '-c:a', 'aac',
              '-b:a', '64k',
@@ -132,11 +142,14 @@
           const data = (await ffmpeg.readFile(outputName)) as Uint8Array;
           processedVideo = data;
           compressedSize = data.length;
-          statusMessage = 'Done!';
+          statusMessage = 'Compression Complete!';
+
+          // Cleanup
           await ffmpeg.deleteFile(inputName);
-       } catch (e) {
-          console.error('Task Error:', e);
-          errorMessage = 'Compression failed. Try a shorter video or use a PC browser.';
+          await ffmpeg.deleteFile(outputName);
+       } catch (e: any) {
+          console.error('Processing Error:', e);
+          errorMessage = `Compression failed: ${e.message || 'The browser ran out of memory'}`;
        } finally {
           isProcessing = false;
        }
@@ -166,20 +179,25 @@
           <div class="bg-[#5865F2] p-2.5 rounded-2xl shadow-lg shadow-indigo-500/20 rotate-[-4deg] group-hover:rotate-0 transition-all">
              <Zap class="text-white h-6 w-6 fill-current" />
           </div>
-          <h1 class="text-2xl font-black tracking-tighter text-[#5865F2] dark:text-white uppercase">Discord Mini</h1>
+          <h1 class="text-2xl font-black tracking-tighter text-[#5865F2] dark:text-white uppercase">Discord Compressor</h1>
        </div>
     </header>
 
     <main class="max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
        <div class="lg:col-span-7 space-y-6">
-          {#if !isSecureContext}
-             <Alert.Root class="bg-amber-50 border-amber-200 text-amber-800 rounded-2xl">
-                <AlertTriangle class="h-4 w-4" />
-                <Alert.Description class="text-xs font-bold uppercase tracking-tight">Multithreading Disabled: Mobile processing may be slow.</Alert.Description>
-             </Alert.Root>
-          {/if}
-
           <Card.Root class="border-none shadow-xl bg-white dark:bg-[#313338] rounded-[32px] overflow-hidden">
+             <Card.Header class="px-8 pt-8 pb-0">
+                 <Card.Title class="text-xl font-black uppercase tracking-tight italic">
+                    {#if !isLoaded && !errorMessage}
+                        <div class="flex items-center gap-2">
+                            <Loader class="h-5 w-5 animate-spin text-[#5865F2]" />
+                            Loading Engine...
+                        </div>
+                    {:else}
+                        Optimize Video
+                    {/if}
+                 </Card.Title>
+             </Card.Header>
              <Card.Content class="p-8 md:p-10 space-y-8">
                 <div class="relative group">
                    <input type="file" accept="video/*" onchange={handleFileSelect} class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
@@ -209,10 +227,7 @@
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                    <div class="space-y-2">
                       <Label class="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em] ml-1">Target Size</Label>
-                      <Select.Root type="single" value={selectedTargetValue} onValueChange={(v) => {
-                         selectedTargetValue = v || '25 MB';
-                         selectedTarget = compressionTargets.find(t => t.label === v) || compressionTargets[1];
-                      }}>
+                      <Select.Root type="single" value={selectedTargetValue} onValueChange={(v) => { if(v) selectedTargetValue = v; }}>
                          <Select.Trigger class="w-full h-14 rounded-2xl border-none bg-slate-100 dark:bg-[#1E1F22] font-black text-lg focus:ring-2 ring-[#5865F2] transition-all">
                             {selectedTargetValue}
                          </Select.Trigger>
@@ -227,8 +242,8 @@
                    <div class="flex items-end">
                       <Button
                          onclick={compressVideo}
-                         disabled={!selectedFile || isProcessing}
-                         class="w-full h-14 rounded-2xl font-black text-lg bg-[#5865F2] hover:bg-[#4752C4] text-white shadow-lg shadow-indigo-500/20 transition-all active:scale-95 italic"
+                         disabled={!selectedFile || isProcessing || !isLoaded}
+                         class="w-full h-14 rounded-2xl font-black text-lg bg-[#5865F2] hover:bg-[#4752C4] text-white shadow-lg shadow-indigo-500/20 transition-all active:scale-95 italic disabled:opacity-50"
                       >
                          {#if isProcessing}
                             <Loader class="mr-2 h-6 w-6 animate-spin" />
@@ -251,8 +266,11 @@
 
                 {#if errorMessage}
                    <Alert.Root variant="destructive" class="rounded-2xl border-none bg-red-50 dark:bg-red-950/20 text-red-600">
-                      <Alert.Description class="font-bold text-xs flex items-center gap-2 uppercase tracking-tight">
-                         <AlertTriangle class="h-4 w-4" /> {errorMessage}
+                      <Alert.Description class="font-bold text-xs flex flex-col gap-2 uppercase tracking-tight">
+                         <div class="flex items-center gap-2">
+                            <AlertTriangle class="h-4 w-4 shrink-0" /> Error Detected
+                         </div>
+                         <span class="normal-case font-medium opacity-80">{errorMessage}</span>
                       </Alert.Description>
                    </Alert.Root>
                 {/if}
