@@ -1,360 +1,344 @@
 <script lang="ts">
-	import { FFmpeg } from '@ffmpeg/ffmpeg';
-	// @ts-ignore
-	import type { LogEvent, ProgressEvent } from '@ffmpeg/ffmpeg/dist/esm/types';
-	import { fetchFile, toBlobURL } from '@ffmpeg/util';
-	import { onMount } from 'svelte';
-	import * as Card from '$lib/components/ui/card/index.js';
-	import * as Select from '$lib/components/ui/select/index.js';
-	import { Button } from '$lib/components/ui/button/index.js';
-	import { Progress } from '$lib/components/ui/progress/index.js';
-	import { Badge } from '$lib/components/ui/badge/index.js';
-	import { Label } from '$lib/components/ui/label/index.js';
-	import { Input } from '$lib/components/ui/input/index.js';
-	import * as Alert from '$lib/components/ui/alert/index.js';
-	import Loader from '@lucide/svelte/icons/loader-circle';
-	import ThemeSelector from '$lib/components/ui/selector/theme-selector.svelte';
-	import Zap from '@lucide/svelte/icons/zap';
-	import ShieldCheck from '@lucide/svelte/icons/shield-check';
+    import { FFmpeg } from '@ffmpeg/ffmpeg';
+    // @ts-ignore
+    import type { LogEvent, ProgressEvent } from '@ffmpeg/ffmpeg/dist/esm/types';
+    import { fetchFile, toBlobURL } from '@ffmpeg/util';
+    import { onMount } from 'svelte';
+    import * as Card from '$lib/components/ui/card/index.js';
+    import * as Select from '$lib/components/ui/select/index.js';
+    import { Button } from '$lib/components/ui/button/index.js';
+    import { Progress } from '$lib/components/ui/progress/index.js';
+    import { Badge } from '$lib/components/ui/badge/index.js';
+    import { Label } from '$lib/components/ui/label/index.js';
+    import * as Alert from '$lib/components/ui/alert/index.js';
+    import Loader from '@lucide/svelte/icons/loader-circle';
+    import Zap from '@lucide/svelte/icons/zap';
+    import ShieldCheck from '@lucide/svelte/icons/shield-check';
+    import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
+    import FileVideo from '@lucide/svelte/icons/file-video-2';
+    import Download from '@lucide/svelte/icons/download';
 
-	// Types
-	interface CompressionTarget {
-		label: string;
-		value: number;
-	}
+    // Types
+    interface CompressionTarget {
+       label: string;
+       value: number;
+    }
 
-	// State
-	let ffmpeg = $state<FFmpeg>();
-	let isLoaded = $state(false);
-	let loadPromise = $state<Promise<void> | null>(null);
-	let isProcessing = $state(false);
-	let progress = $state(0);
-	let selectedFile = $state<File | null>(null);
-	let processedVideo = $state<Uint8Array | null>(null);
-	let originalSize = $state(0);
-	let compressedSize = $state(0);
-	let errorMessage = $state('');
-	let statusMessage = $state('Initializing...');
-	let videoDuration = $state(0);
+    // State
+    let ffmpeg = $state<FFmpeg>();
+    let isLoaded = $state(false);
+    let loadPromise = $state<Promise<void> | null>(null);
+    let isProcessing = $state(false);
+    let progress = $state(0);
+    let selectedFile = $state<File | null>(null);
+    let processedVideo = $state<Uint8Array | null>(null);
+    let originalSize = $state(0);
+    let compressedSize = $state(0);
+    let errorMessage = $state('');
+    let statusMessage = $state('Initializing Engine...');
+    let videoDuration = $state(0);
+    let isSecureContext = $state(true);
 
-	const compressionTargets: CompressionTarget[] = [
-		{ label: '8 MB', value: 8 * 1024 * 1024 },
-		{ label: '25 MB', value: 25 * 1024 * 1024 },
-		{ label: '50 MB', value: 50 * 1024 * 1024 }
-	];
-	let selectedTargetValue = $state('25 MB');
-	let selectedTarget = $state(compressionTargets[1]);
+    const compressionTargets: CompressionTarget[] = [
+       { label: '8 MB', value: 8 * 1024 * 1024 },
+       { label: '25 MB', value: 25 * 1024 * 1024 },
+       { label: '50 MB', value: 50 * 1024 * 1024 }
+    ];
+    let selectedTargetValue = $state('25 MB');
+    let selectedTarget = $state(compressionTargets[1]);
 
-	onMount(() => {
-		// Start engine load silently
-		loadPromise = initFFmpeg();
-	});
+    onMount(() => {
+       // Mobile Error Prevention: Check for SharedArrayBuffer (COOP/COEP headers)
+       if (typeof SharedArrayBuffer === 'undefined') {
+          isSecureContext = false;
+          errorMessage = "Mobile Error: Your browser doesn't support multithreading. Please use Chrome/Safari and ensure COOP/COEP headers are set.";
+       }
+       loadPromise = initFFmpeg();
+    });
 
-	const initFFmpeg = async (): Promise<void> => {
-		try {
-			ffmpeg = new FFmpeg();
-			ffmpeg.on('progress', ({ progress: prog }: ProgressEvent) => {
-				// Scale real progress from 15% to 100%
-				progress = 15 + Math.round(prog * 85);
-			});
-			// Listen for logs to catch potential errors early
-			ffmpeg.on('log', ({ message }) => {
-				if (message.includes('Error')) console.warn('FFmpeg Log:', message);
-			});
+    const initFFmpeg = async (): Promise<void> => {
+       try {
+          ffmpeg = new FFmpeg();
+          ffmpeg.on('progress', ({ progress: prog }: ProgressEvent) => {
+             progress = 15 + Math.round(prog * 85);
+          });
 
-			await ffmpeg.load({
-				coreURL: await toBlobURL(`ffmpeg/ffmpeg-core.js`, 'text/javascript'),
-				wasmURL: await toBlobURL(`ffmpeg/ffmpeg-core.wasm`, 'application/wasm'),
-				workerURL: await toBlobURL(`ffmpeg/ffmpeg-core.worker.js`, 'text/javascript')
-			});
-			isLoaded = true;
-		} catch (error) {
-			console.error('WASM Load Fail:', error);
-			errorMessage = 'Engine failed to start. Please use a modern browser like Chrome.';
-		}
-	};
+          await ffmpeg.load({
+             coreURL: await toBlobURL(`/ffmpeg-core.js`, 'text/javascript'),
+             wasmURL: await toBlobURL(`/ffmpeg-core.wasm`, 'application/wasm'),
+          });
+          isLoaded = true;
+       } catch (error) {
+          console.error('FFmpeg Load Fail:', error);
+          errorMessage = 'Engine failed to start. Mobile browsers require the latest version and HTTPS.';
+       }
+    };
 
-	const handleFileSelect = (event: Event) => {
-		const target = event.target as HTMLInputElement;
-		const file = target.files?.[0];
-		if (file) {
-			selectedFile = file;
-			originalSize = file.size;
-			processedVideo = null;
-			errorMessage = '';
+    const handleFileSelect = (event: Event) => {
+       const target = event.target as HTMLInputElement;
+       const file = target.files?.[0];
+       if (file) {
+          selectedFile = file;
+          originalSize = file.size;
+          processedVideo = null;
+          errorMessage = '';
 
-			const v = document.createElement('video');
-			v.src = URL.createObjectURL(file);
-			v.onloadedmetadata = () => {
-				videoDuration = v.duration;
-				URL.revokeObjectURL(v.src);
-			};
-		}
-	};
+          const v = document.createElement('video');
+          v.src = URL.createObjectURL(file);
+          v.onloadedmetadata = () => {
+             videoDuration = v.duration;
+             URL.revokeObjectURL(v.src);
+          };
+       }
+    };
 
-	const compressVideo = async () => {
-		if (!selectedFile) return;
-		isProcessing = true;
-		progress = 1;
-		errorMessage = '';
-		statusMessage = 'Analyzing video structure...';
+    const compressVideo = async () => {
+       if (!selectedFile || !ffmpeg) return;
+       isProcessing = true;
+       progress = 1;
+       errorMessage = '';
+       statusMessage = 'Analyzing structure...';
 
-		try {
-			// Fake progress while waiting for JS/WASM loading
-			if (!isLoaded && loadPromise) {
-				const interval = setInterval(() => {
-					if (progress < 14) progress += 1;
-				}, 700);
-				await loadPromise;
-				clearInterval(interval);
-			}
+       try {
+          if (!isLoaded && loadPromise) await loadPromise;
 
-			if (!ffmpeg) throw new Error('FFmpeg not ready');
+          const inputName = 'input.mp4';
+          const outputName = 'output.mp4';
 
-			progress = 15;
-			statusMessage = 'Optimizing frames for Discord...';
+          await ffmpeg.writeFile(inputName, await fetchFile(selectedFile));
 
-			const inputName = 'input_file';
-			const outputName = 'output.mp4';
+          // Safety margin for Discord (12%)
+          const targetBitrateKbps = Math.floor(((selectedTarget.value * 8) / (videoDuration || 1) / 1000) * 0.88);
+          const videoBitrate = Math.max(120, targetBitrateKbps - 64);
 
-			// Clean up previous files if any
-			try { await ffmpeg.deleteFile(outputName); } catch(e) {}
+          statusMessage = 'Compressing for Discord...';
 
-			await ffmpeg.writeFile(inputName, await fetchFile(selectedFile));
+          await ffmpeg.exec([
+             '-i', inputName,
+             '-c:v', 'libx264',
+             '-b:v', `${videoBitrate}k`,
+             '-preset', 'ultrafast',
+             '-profile:v', 'baseline',
+             '-level', '3.0',
+             // Mobile stability: Downscale to max 720p
+             '-vf', 'scale=iw*min(1\\,720/iw):-2,format=yuv420p',
+             '-c:a', 'aac',
+             '-b:a', '64k',
+             '-ac', '2',
+             '-movflags', '+faststart',
+             outputName
+          ]);
 
-			// Bitrate Calculation with 12% safety margin
-			const targetBitrateKbps = Math.floor(((selectedTarget.value * 8) / (videoDuration || 1) / 1000) * 0.88);
-			const videoBitrate = Math.max(150, targetBitrateKbps - 128);
+          const data = (await ffmpeg.readFile(outputName)) as Uint8Array;
+          processedVideo = data;
+          compressedSize = data.length;
+          statusMessage = 'Done!';
+          await ffmpeg.deleteFile(inputName);
+       } catch (e) {
+          console.error('Task Error:', e);
+          errorMessage = 'Compression failed. Try a shorter video or use a PC browser.';
+       } finally {
+          isProcessing = false;
+       }
+    };
 
-			// Core Command: Optimized for browser WASM limits
-			await ffmpeg.exec([
-				'-i', inputName,
-				'-c:v', 'libx264',
-				'-b:v', `${videoBitrate}k`,
-				'-preset', 'ultrafast', // Crucial for preventing WASM crashes
-				'-profile:v', 'baseline', // Best compatibility for Discord mobile
-				'-level', '3.0',
-				'-vf', 'scale=iw*min(1\\,1280/iw):-2,format=yuv420p',
-				'-c:a', 'aac',
-				'-b:a', '128k',
-				'-ac', '2',
-				'-movflags', '+faststart',
-				outputName
-			]);
-
-			const data = (await ffmpeg.readFile(outputName)) as Uint8Array;
-			processedVideo = data;
-			compressedSize = data.length;
-			statusMessage = 'Successfully Optimized!';
-
-			// Auto cleanup
-			await ffmpeg.deleteFile(inputName);
-		} catch (e) {
-			console.error('Task Error:', e);
-			errorMessage = 'Optimization failed. Try a smaller file or a different browser tab.';
-		} finally {
-			isProcessing = false;
-		}
-	};
-
-	const downloadVideo = () => {
-		if (!processedVideo) return;
-		const blob = new Blob([processedVideo], { type: 'video/mp4' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = `Discord_${selectedTarget.label}_${selectedFile?.name || 'video.mp4'}`;
-		a.click();
-		URL.revokeObjectURL(url);
-	};
+    const downloadVideo = () => {
+       if (!processedVideo) return;
+       const blob = new Blob([processedVideo], { type: 'video/mp4' });
+       const url = URL.createObjectURL(blob);
+       const a = document.createElement('a');
+       a.href = url;
+       a.download = `Discord_${selectedTarget.label}_${selectedFile?.name || 'video.mp4'}`;
+       a.click();
+       URL.revokeObjectURL(url);
+    };
 </script>
 
 <svelte:head>
-	<title>Discord Video Compressor - Resize MP4 to 8MB/25MB Online</title>
-	<meta name="description" content="Free and private Discord video compressor. Shrink your videos to 8MB, 25MB or 50MB directly in your browser. No uploads, no storage, pure privacy." />
-	<meta name="keywords" content="discord compressor, video compressor 8mb, 25mb video reducer, nitro video compressor, online video resizer discord" />
+    <title>Discord Video Compressor - Resize MP4 to 8MB/25MB Online</title>
+    <meta name="description" content="Free and private Discord video compressor. Shrink your videos to 8MB, 25MB or 50MB directly in your browser. No uploads, no storage, pure privacy." />
+    <meta name="keywords" content="discord compressor, video compressor 8mb, 25mb video reducer, nitro video compressor, online video resizer discord" />
 </svelte:head>
 
-<div class="min-h-screen bg-slate-50 text-slate-900 flex flex-col items-center p-4 md:p-12 font-sans">
-	<header class="w-full max-w-4xl flex justify-between items-center mb-16">
-		<div class="flex items-center gap-2">
-			<div class="bg-indigo-600 p-2 rounded-xl shadow-lg">
-				<Zap class="text-white h-6 w-6 fill-white" />
-			</div>
-			<h1 class="text-xl font-black tracking-tighter">DISCORD COMPRESSOR</h1>
-		</div>
-		<ThemeSelector />
-	</header>
+<div class="min-h-screen bg-[#F2F3F5] dark:bg-[#2B2D31] text-[#2E3338] dark:text-[#DBDEE1] p-4 md:p-12 font-sans transition-colors">
+    <header class="max-w-5xl mx-auto flex justify-between items-center mb-12">
+       <div class="flex items-center gap-3 group cursor-default">
+          <div class="bg-[#5865F2] p-2.5 rounded-2xl shadow-lg shadow-indigo-500/20 rotate-[-4deg] group-hover:rotate-0 transition-all">
+             <Zap class="text-white h-6 w-6 fill-current" />
+          </div>
+          <h1 class="text-2xl font-black tracking-tighter text-[#5865F2] dark:text-white uppercase">Discord Mini</h1>
+       </div>
+    </header>
 
-	<main class="w-full max-w-4xl grid grid-cols-1 lg:grid-cols-12 gap-12">
-		<div class="lg:col-span-7 space-y-6">
-			<Card.Root class="border-none shadow-2xl bg-white overflow-hidden rounded-3xl">
-				<Card.Header class="pb-2">
-					<Card.Title class="text-2xl font-bold">Compress Video</Card.Title>
-					<p class="text-sm text-slate-400 font-medium tracking-tight">Fits any video into Discord's limits.</p>
-				</Card.Header>
-				<Card.Content class="p-8 space-y-8">
-					<div class="relative">
-						<input
-							type="file"
-							accept="video/*"
-							onchange={handleFileSelect}
-							class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-						/>
-						<div class="border-2 border-dashed border-slate-200 rounded-2xl py-14 text-center transition-all hover:bg-indigo-50 hover:border-indigo-300">
-							{#if selectedFile}
-								<div class="px-4">
-									<p class="font-bold text-indigo-600 truncate">{selectedFile.name}</p>
-									<p class="text-xs text-slate-400 mt-1 uppercase font-bold tracking-widest">
-										Original: {(originalSize / 1024 / 1024).toFixed(2)} MB
-									</p>
-								</div>
-							{:else}
-								<div class="space-y-2">
-									<div class="mx-auto w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center mb-4">
-										<ShieldCheck class="text-indigo-600 w-6 h-6" />
-									</div>
-									<p class="text-lg font-bold">Upload Video</p>
-									<p class="text-xs text-slate-400 font-medium">MP4, MOV, WEBM (UP TO 500MB)</p>
-								</div>
-							{/if}
-						</div>
-					</div>
+    <main class="max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
+       <div class="lg:col-span-7 space-y-6">
+          {#if !isSecureContext}
+             <Alert.Root class="bg-amber-50 border-amber-200 text-amber-800 rounded-2xl">
+                <AlertTriangle class="h-4 w-4" />
+                <Alert.Description class="text-xs font-bold uppercase tracking-tight">Multithreading Disabled: Mobile processing may be slow.</Alert.Description>
+             </Alert.Root>
+          {/if}
 
-					<div class="space-y-4">
-						<div class="space-y-2">
-							<Label class="text-xs font-bold uppercase text-slate-400">Target File Size</Label>
-							<Select.Root type="single" value={selectedTargetValue} onValueChange={(v) => {
-								selectedTargetValue = v || '25 MB';
-								selectedTarget = compressionTargets.find(t => t.label === v) || compressionTargets[1];
-							}}>
-								<Select.Trigger class="w-full h-12 rounded-xl font-bold">{selectedTargetValue}</Select.Trigger>
-								<Select.Content>
-									{#each compressionTargets as t}
-										<Select.Item value={t.label} class="font-medium">{t.label}</Select.Item>
-									{/each}
-								</Select.Content>
-							</Select.Root>
-						</div>
+          <Card.Root class="border-none shadow-xl bg-white dark:bg-[#313338] rounded-[32px] overflow-hidden">
+             <Card.Content class="p-8 md:p-10 space-y-8">
+                <div class="relative group">
+                   <input type="file" accept="video/*" onchange={handleFileSelect} class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+                   <div class="border-2 border-dashed border-slate-200 dark:border-[#4E5058] rounded-[24px] py-16 text-center transition-all group-hover:bg-slate-50 dark:group-hover:bg-[#383A40] group-hover:border-[#5865F2]">
+                      {#if selectedFile}
+                         <div class="flex flex-col items-center px-6">
+                            <div class="bg-[#5865F2] p-4 rounded-full mb-4 shadow-lg shadow-indigo-500/30">
+                               <FileVideo class="text-white h-8 w-8" />
+                            </div>
+                            <p class="font-bold dark:text-white truncate max-w-full italic">{selectedFile.name}</p>
+                            <Badge variant="secondary" class="mt-2 bg-slate-100 dark:bg-[#1E1F22] text-[#5865F2] font-black italic uppercase tracking-widest text-[10px]">
+                               Original: {(originalSize / 1024 / 1024).toFixed(2)} MB
+                            </Badge>
+                         </div>
+                      {:else}
+                         <div class="space-y-3">
+                            <div class="mx-auto w-14 h-14 bg-slate-100 dark:bg-[#383A40] rounded-full flex items-center justify-center mb-4">
+                               <ShieldCheck class="text-slate-400 w-7 h-7" />
+                            </div>
+                            <p class="text-lg font-black dark:text-white uppercase italic tracking-tighter">Upload Video</p>
+                            <p class="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em]">Private Browser Processing</p>
+                         </div>
+                      {/if}
+                   </div>
+                </div>
 
-						<Button
-							onclick={compressVideo}
-							disabled={!selectedFile || isProcessing}
-							class="w-full font-black h-14 rounded-2xl text-lg shadow-indigo-200 shadow-xl transition-transform active:scale-95 bg-indigo-600 hover:bg-indigo-700"
-						>
-							{#if isProcessing}
-								<Loader class="mr-2 h-5 w-5 animate-spin" />
-								{progress}%
-							{:else}
-								START COMPRESSION
-							{/if}
-						</Button>
-					</div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                   <div class="space-y-2">
+                      <Label class="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em] ml-1">Target Size</Label>
+                      <Select.Root type="single" value={selectedTargetValue} onValueChange={(v) => {
+                         selectedTargetValue = v || '25 MB';
+                         selectedTarget = compressionTargets.find(t => t.label === v) || compressionTargets[1];
+                      }}>
+                         <Select.Trigger class="w-full h-14 rounded-2xl border-none bg-slate-100 dark:bg-[#1E1F22] font-black text-lg focus:ring-2 ring-[#5865F2] transition-all">
+                            {selectedTargetValue}
+                         </Select.Trigger>
+                         <Select.Content class="rounded-xl border-none shadow-2xl">
+                            {#each compressionTargets as t}
+                               <Select.Item value={t.label} class="font-bold py-3">{t.label}</Select.Item>
+                            {/each}
+                         </Select.Content>
+                      </Select.Root>
+                   </div>
 
-					{#if isProcessing}
-						<div class="space-y-3 pt-2">
-							<Progress value={progress} class="h-2 rounded-full bg-slate-100" />
-							<p class="text-[10px] text-center font-black animate-pulse uppercase tracking-[0.2em] text-indigo-400">
-								{statusMessage}
-							</p>
-						</div>
-					{/if}
+                   <div class="flex items-end">
+                      <Button
+                         onclick={compressVideo}
+                         disabled={!selectedFile || isProcessing}
+                         class="w-full h-14 rounded-2xl font-black text-lg bg-[#5865F2] hover:bg-[#4752C4] text-white shadow-lg shadow-indigo-500/20 transition-all active:scale-95 italic"
+                      >
+                         {#if isProcessing}
+                            <Loader class="mr-2 h-6 w-6 animate-spin" />
+                            {progress}%
+                         {:else}
+                            OPTIMIZE NOW
+                         {/if}
+                      </Button>
+                   </div>
+                </div>
 
-					{#if errorMessage}
-						<Alert.Root variant="destructive" class="rounded-xl border-none bg-red-50 text-red-600">
-							<Alert.Description class="font-bold text-xs">{errorMessage}</Alert.Description>
-						</Alert.Root>
-					{/if}
-				</Card.Content>
-			</Card.Root>
+                {#if isProcessing}
+                   <div class="space-y-3 pt-2">
+                      <Progress value={progress} class="h-3 rounded-full bg-slate-100 dark:bg-[#1E1F22]" />
+                      <p class="text-[10px] text-center font-black animate-pulse uppercase tracking-[0.3em] text-[#5865F2]">
+                         {statusMessage}
+                      </p>
+                   </div>
+                {/if}
 
-			{#if processedVideo}
-				<div class="bg-emerald-50 border-2 border-emerald-100 p-6 rounded-3xl flex items-center justify-between animate-in fade-in slide-in-from-bottom-4">
-					<div>
-						<p class="text-xs font-black text-emerald-600 uppercase tracking-widest mb-1">Compression Result</p>
-						<p class="text-2xl font-black text-emerald-900">{(compressedSize / 1024 / 1024).toFixed(2)} MB</p>
-					</div>
-					<Button onclick={downloadVideo} size="lg" class="rounded-2xl px-10 bg-emerald-600 hover:bg-emerald-700 font-bold shadow-lg shadow-emerald-100">
-						DOWNLOAD
-					</Button>
-				</div>
-			{/if}
-		</div>
+                {#if errorMessage}
+                   <Alert.Root variant="destructive" class="rounded-2xl border-none bg-red-50 dark:bg-red-950/20 text-red-600">
+                      <Alert.Description class="font-bold text-xs flex items-center gap-2 uppercase tracking-tight">
+                         <AlertTriangle class="h-4 w-4" /> {errorMessage}
+                      </Alert.Description>
+                   </Alert.Root>
+                {/if}
+             </Card.Content>
+          </Card.Root>
 
-		<div class="lg:col-span-5 space-y-10">
-			<section class="space-y-4">
-				<h3 class="text-sm font-black uppercase tracking-widest text-indigo-600">Why choose us?</h3>
-				<div class="grid gap-4">
-					<div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
-						<p class="font-bold text-slate-800 text-sm mb-1">Total Privacy</p>
-						<p class="text-xs text-slate-400 leading-relaxed">Videos are processed locally in your RAM. Your files never leave your device.</p>
-					</div>
-					<div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
-						<p class="font-bold text-slate-800 text-sm mb-1">No File Limits</p>
-						<p class="text-xs text-slate-400 leading-relaxed">Compress large files for Discord Nitro or fit them into the 25MB standard limit.</p>
-					</div>
-				</div>
-			</section>
+          {#if processedVideo}
+             <div class="bg-[#23A559] p-6 rounded-[28px] flex flex-col md:flex-row items-center justify-between gap-6 shadow-xl shadow-green-500/10 animate-in zoom-in-95">
+                <div class="text-white text-center md:text-left">
+                   <p class="text-[10px] font-black uppercase tracking-[0.2em] opacity-80 mb-1">Compression Done</p>
+                   <p class="text-3xl font-black italic">{(compressedSize / 1024 / 1024).toFixed(2)} MB</p>
+                </div>
+                <Button onclick={downloadVideo} size="lg" class="w-full md:w-auto rounded-2xl px-12 bg-white text-[#23A559] hover:bg-slate-100 font-black italic shadow-lg gap-2">
+                   <Download class="h-5 w-5" /> DOWNLOAD
+                </Button>
+             </div>
+          {/if}
+       </div>
 
-			<section class="bg-indigo-600 rounded-3xl p-8 text-white shadow-xl shadow-indigo-100">
-				<h3 class="font-black text-xl mb-4 italic uppercase tracking-tighter">Discord Limits 2025</h3>
-				<div class="space-y-4 font-bold text-sm">
-					<div class="flex justify-between border-b border-indigo-500 pb-2">
-						<span class="opacity-80">Free / Standard</span>
-						<span>25 MB</span>
-					</div>
-					<div class="flex justify-between border-b border-indigo-500 pb-2">
-						<span class="opacity-80">Nitro Basic</span>
-						<span>50 MB</span>
-					</div>
-					<div class="flex justify-between">
-						<span class="opacity-80">Nitro Pro</span>
-						<span>500 MB</span>
-					</div>
-				</div>
-			</section>
-		</div>
-	</main>
+       <div class="lg:col-span-5 space-y-8">
+          <section class="bg-white dark:bg-[#313338] p-8 rounded-[32px] shadow-sm">
+             <h3 class="text-[11px] font-black uppercase tracking-[0.2em] text-[#5865F2] mb-6">Discord Limits 2025</h3>
+             <div class="space-y-5 font-bold">
+                <div class="flex justify-between items-center text-sm border-b border-slate-50 dark:border-[#383A40] pb-4">
+                   <span class="text-slate-500">Free Users</span>
+                   <Badge variant="outline" class="rounded-lg border-slate-200 dark:border-[#4E5058] font-black">25 MB</Badge>
+                </div>
+                <div class="flex justify-between items-center text-sm border-b border-slate-50 dark:border-[#383A40] pb-4">
+                   <span class="text-slate-500">Nitro Basic</span>
+                   <Badge variant="outline" class="rounded-lg border-indigo-200 dark:border-[#5865F2] text-[#5865F2] font-black">50 MB</Badge>
+                </div>
+                <div class="flex justify-between items-center text-sm">
+                   <span class="text-slate-500">Nitro Pro</span>
+                   <Badge class="bg-gradient-to-r from-pink-500 to-indigo-500 border-none font-black text-white">500 MB</Badge>
+                </div>
+             </div>
+          </section>
 
-	<section class="w-full max-w-4xl mt-32 space-y-16 border-t border-slate-200 pt-20">
-		<h2 class="text-4xl font-black text-center tracking-tighter italic">FAQ</h2>
+          <section class="bg-[#5865F2] p-8 rounded-[32px] text-white shadow-xl shadow-indigo-500/20">
+             <h3 class="font-black text-xl mb-4 italic uppercase tracking-tighter">Zero-Upload Privacy</h3>
+             <p class="text-sm opacity-90 leading-relaxed font-medium">
+                Unlike other compressors, we don't own servers. Your video is processed in your **RAM**. Once you close the tab, the video is gone forever.
+             </p>
+          </section>
+       </div>
+    </main>
 
-		<div class="grid grid-cols-1 md:grid-cols-2 gap-12">
-			<div class="space-y-3">
-				<h4 class="font-black text-indigo-600 uppercase text-xs tracking-widest">How to compress video to 8MB?</h4>
-				<p class="text-sm text-slate-500 leading-relaxed font-medium">
-					Discord recently increased the limit to 25MB, but some servers still prefer smaller files. Select "8 MB" in our settings, and we'll handle the complex calculations to make it fit perfectly.
-				</p>
-			</div>
-			<div class="space-y-3">
-				<h4 class="font-black text-indigo-600 uppercase text-xs tracking-widest">Why is my file still too big?</h4>
-				<p class="text-sm text-slate-500 leading-relaxed font-medium">
-					If the video is extremely long, even high compression might struggle. We suggest trimming videos to under 3 minutes for the best results on Discord.
-				</p>
-			</div>
-			<div class="space-y-3">
-				<h4 class="font-black text-indigo-600 uppercase text-xs tracking-widest">Does it work on Mobile?</h4>
-				<p class="text-sm text-slate-500 leading-relaxed font-medium">
-					Yes! Our tool works on Chrome and Safari for iOS and Android. It uses your phone's processor to compress videos on-the-go.
-				</p>
-			</div>
-			<div class="space-y-3">
-				<h4 class="font-black text-indigo-600 uppercase text-xs tracking-widest">Is it really free?</h4>
-				<p class="text-sm text-slate-500 leading-relaxed font-medium">
-					Absolutely. There are no subscriptions or hidden fees. We don't even have servers to store your videos, which keeps our costs low and your data safe.
-				</p>
-			</div>
-		</div>
-	</section>
+    <section class="max-w-5xl mx-auto mt-32 space-y-16 border-t border-slate-200 dark:border-[#4E5058] pt-20">
+       <h2 class="text-5xl font-black text-center tracking-tighter italic uppercase text-slate-800 dark:text-white">FAQ</h2>
 
-	<footer class="mt-32 pb-12 text-center text-[10px] font-bold uppercase tracking-[0.3em] text-slate-300">
-		© 2025 DiscordCompressor.com | Browser-Based Optimization
-	</footer>
+       <div class="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-16">
+          <div class="space-y-4">
+             <h4 class="font-black text-[#5865F2] uppercase text-xs tracking-[0.2em]">How to compress video to 8MB?</h4>
+             <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed font-medium">
+                Discord recently increased the limit to 25MB, but some servers still prefer smaller files. Select "8 MB" in our settings, and we'll handle the complex bitrate calculations to ensure it fits perfectly without crashing the Discord mobile app.
+             </p>
+          </div>
+          <div class="space-y-4">
+             <h4 class="font-black text-[#5865F2] uppercase text-xs tracking-[0.2em]">Why is my file still too big?</h4>
+             <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed font-medium">
+                If the video is extremely long (e.g., over 10 minutes), even high compression might struggle to reach 8MB while maintaining quality. We suggest trimming videos to under 3 minutes for the best results on Discord.
+             </p>
+          </div>
+          <div class="space-y-4">
+             <h4 class="font-black text-[#5865F2] uppercase text-xs tracking-[0.2em]">Does it work on Mobile?</h4>
+             <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed font-medium">
+                Yes! Our tool works on Chrome and Safari for iOS and Android. It uses your phone's internal processor. Note that older phones might struggle with high-resolution files.
+             </p>
+          </div>
+          <div class="space-y-4">
+             <h4 class="font-black text-[#5865F2] uppercase text-xs tracking-[0.2em]">Is it really free?</h4>
+             <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed font-medium">
+                Absolutely. There are no subscriptions, hidden fees, or watermarks. By processing everything locally, we eliminate server costs and pass that benefit directly to you.
+             </p>
+          </div>
+       </div>
+    </section>
+
+    <footer class="mt-32 pb-12 text-center text-[10px] font-black uppercase tracking-[0.5em] text-slate-400">
+       © 2025 DiscordCompressor.com | Browser-Based Optimization
+    </footer>
 </div>
 
 <style>
-	:global(html) {
-		scroll-behavior: smooth;
-		background-color: #f8fafc;
-	}
+    :global(html) {
+       scroll-behavior: smooth;
+       -webkit-tap-highlight-color: transparent;
+    }
 </style>
