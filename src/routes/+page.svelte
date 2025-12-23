@@ -24,9 +24,10 @@
        value: number;
     }
 
-    // State - Using Svelte 5 Runes
+    // State
     let ffmpeg = $state<FFmpeg | null>(null);
     let isLoaded = $state(false);
+    let engineLoadPromise = $state<Promise<void> | null>(null); // Store the loading promise
     let isProcessing = $state(false);
     let progress = $state(0);
     let selectedFile = $state<File | null>(null);
@@ -34,7 +35,7 @@
     let originalSize = $state(0);
     let compressedSize = $state(0);
     let errorMessage = $state('');
-    let statusMessage = $state('Ready to optimize');
+    let statusMessage = $state('Ready');
     let videoDuration = $state(0);
 
     const compressionTargets: CompressionTarget[] = [
@@ -46,43 +47,38 @@
     let selectedTarget = $derived(compressionTargets.find(t => t.label === selectedTargetValue) || compressionTargets[1]);
 
     onMount(() => {
-        initFFmpeg();
+        // Start loading immediately in background, store promise
+        engineLoadPromise = initFFmpeg();
     });
 
     const initFFmpeg = async () => {
        try {
-          // Check for SharedArrayBuffer - the #1 cause of Web/Mobile errors
           if (typeof SharedArrayBuffer === 'undefined') {
-             console.error("SharedArrayBuffer not available.");
-             errorMessage = "Security Error: Cross-Origin Isolation is not enabled. If you are developing locally, Vite needs specific headers. If deployed, check COOP/COEP headers.";
-             return;
+             errorMessage = "Browser Error: SharedArrayBuffer is missing. Please use Chrome desktop or ensure COOP/COEP headers are set.";
+             throw new Error("SharedArrayBuffer missing");
           }
 
-          ffmpeg = new FFmpeg();
+          const _ffmpeg = new FFmpeg();
 
-          // Log listener for debugging
-          ffmpeg.on('log', ({ message }) => {
-              console.log('FFmpeg:', message);
+          _ffmpeg.on('log', ({ message }) => console.log('FFmpeg:', message));
+          _ffmpeg.on('progress', ({ progress: prog }: ProgressEvent) => {
+             // Real progress (0-1) mapped to 10-100 (leaving 0-10 for initialization visual)
+             progress = Math.max(progress, 10 + Math.round(prog * 90));
           });
 
-          ffmpeg.on('progress', ({ progress: prog }: ProgressEvent) => {
-             // Progress is 0 to 1, convert to 1-100
-             progress = Math.round(prog * 100);
-          });
-
-          // Use unpkg as a fallback if local files in /static/ are missing
+          // Use unpkg as fallback
           const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
-
-          await ffmpeg.load({
+          await _ffmpeg.load({
              coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
              wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
           });
 
+          ffmpeg = _ffmpeg;
           isLoaded = true;
-          statusMessage = 'Engine loaded successfully';
        } catch (error: any) {
-          console.error('Initialization Error:', error);
-          errorMessage = `Failed to load FFmpeg: ${error.message || 'Unknown error'}`;
+          console.error('Init Error:', error);
+          if (!errorMessage) errorMessage = "Engine failed to load. Please refresh or try Chrome Desktop.";
+          throw error;
        }
     };
 
@@ -94,7 +90,6 @@
           originalSize = file.size;
           processedVideo = null;
           errorMessage = '';
-
           const v = document.createElement('video');
           v.src = URL.createObjectURL(file);
           v.onloadedmetadata = () => {
@@ -104,24 +99,46 @@
        }
     };
 
+    // Simulate progress while waiting for engine
+    const simulateLoading = async () => {
+        const steps = [5, 15, 30, 45, 60, 70, 75];
+        for (const step of steps) {
+            if (isLoaded) break; // If loaded, stop faking and jump to real logic
+            progress = step;
+            statusMessage = "Initializing Engine...";
+            await new Promise(r => setTimeout(r, 400)); // Delay between steps
+        }
+    };
+
     const compressVideo = async () => {
-       if (!selectedFile || !ffmpeg || !isLoaded) return;
+       if (!selectedFile) return;
        isProcessing = true;
-       progress = 0;
+       progress = 2; // Start small
        errorMessage = '';
-       statusMessage = 'Analyzing file...';
+       processedVideo = null;
+       statusMessage = 'Preparing...';
 
        try {
+          // 1. If not loaded, run simulation AND wait for real promise
+          if (!isLoaded && engineLoadPromise) {
+             const simulation = simulateLoading();
+             await engineLoadPromise; // Wait for the real background load to finish
+             // Once here, engine is ready.
+          }
+
+          if (!ffmpeg) throw new Error("Engine not ready");
+
+          // 2. Real Processing Logic
           const inputName = 'input.mp4';
           const outputName = 'output.mp4';
 
           await ffmpeg.writeFile(inputName, await fetchFile(selectedFile));
 
-          // Bitrate logic for Discord
+          // Bitrate Calculation
           const targetBitrateKbps = Math.floor(((selectedTarget.value * 8) / (videoDuration || 1) / 1000) * 0.88);
           const videoBitrate = Math.max(120, targetBitrateKbps - 64);
 
-          statusMessage = 'Compressing...';
+          statusMessage = 'Optimizing for Discord...';
 
           await ffmpeg.exec([
              '-i', inputName,
@@ -130,11 +147,8 @@
              '-preset', 'ultrafast',
              '-profile:v', 'baseline',
              '-level', '3.0',
-             // Downscale to 720p for mobile stability
-             '-vf', 'scale=iw*min(1\\,720/iw):-2,format=yuv420p',
-             '-c:a', 'aac',
-             '-b:a', '64k',
-             '-ac', '2',
+             '-vf', 'scale=iw*min(1\\,720/iw):-2,format=yuv420p', // Mobile Safe 720p
+             '-c:a', 'aac', '-b:a', '64k', '-ac', '2',
              '-movflags', '+faststart',
              outputName
           ]);
@@ -142,16 +156,21 @@
           const data = (await ffmpeg.readFile(outputName)) as Uint8Array;
           processedVideo = data;
           compressedSize = data.length;
-          statusMessage = 'Compression Complete!';
+          statusMessage = 'Done!';
+          progress = 100;
 
-          // Cleanup
           await ffmpeg.deleteFile(inputName);
           await ffmpeg.deleteFile(outputName);
+
        } catch (e: any) {
-          console.error('Processing Error:', e);
-          errorMessage = `Compression failed: ${e.message || 'The browser ran out of memory'}`;
+          console.error('Task Error:', e);
+          errorMessage = isLoaded
+            ? "Compression failed. File might be too complex for browser memory."
+            : "Engine failed to initialize. Please check your connection.";
        } finally {
-          isProcessing = false;
+          // Only turn off processing flag if we failed. If success, keep showing "Done" state or reset manually.
+          if (errorMessage) isProcessing = false;
+          else isProcessing = false;
        }
     };
 
@@ -188,14 +207,7 @@
           <Card.Root class="border-none shadow-xl bg-white dark:bg-[#313338] rounded-[32px] overflow-hidden">
              <Card.Header class="px-8 pt-8 pb-0">
                  <Card.Title class="text-xl font-black uppercase tracking-tight italic">
-                    {#if !isLoaded && !errorMessage}
-                        <div class="flex items-center gap-2">
-                            <Loader class="h-5 w-5 animate-spin text-[#5865F2]" />
-                            Loading Engine...
-                        </div>
-                    {:else}
-                        Optimize Video
-                    {/if}
+                    Optimize Video
                  </Card.Title>
              </Card.Header>
              <Card.Content class="p-8 md:p-10 space-y-8">
@@ -242,7 +254,7 @@
                    <div class="flex items-end">
                       <Button
                          onclick={compressVideo}
-                         disabled={!selectedFile || isProcessing || !isLoaded}
+                         disabled={!selectedFile || isProcessing}
                          class="w-full h-14 rounded-2xl font-black text-lg bg-[#5865F2] hover:bg-[#4752C4] text-white shadow-lg shadow-indigo-500/20 transition-all active:scale-95 italic disabled:opacity-50"
                       >
                          {#if isProcessing}
@@ -265,7 +277,7 @@
                 {/if}
 
                 {#if errorMessage}
-                   <Alert.Root variant="destructive" class="rounded-2xl border-none bg-red-50 dark:bg-red-950/20 text-red-600">
+                   <Alert.Root variant="destructive" class="rounded-2xl border-none bg-red-50 dark:bg-red-950/20 text-red-600 animate-in fade-in slide-in-from-top-2">
                       <Alert.Description class="font-bold text-xs flex flex-col gap-2 uppercase tracking-tight">
                          <div class="flex items-center gap-2">
                             <AlertTriangle class="h-4 w-4 shrink-0" /> Error Detected
