@@ -586,7 +586,7 @@
 	<meta property="og:type" content="website" />
 	<meta property="og:title" content="{m.app_title()} - {m.app_subtitle()}" />
 	<meta property="og:description" content={m.app_subtitle()} />
-	<meta property="og:url" content="https://compress.lol" />
+	<meta property="og:url" content="https://discordcompressor.com" />
 
 	<!-- Twitter -->
 	<meta property="twitter:card" content="summary_large_image" />

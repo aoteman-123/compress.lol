@@ -1,12 +1,12 @@
-# 🎬 Compress.lol – WebAssembly-Powered Video Compression
+# 🎬 discordcompressor.com – WebAssembly-Powered Video Compression
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![GitHub issues](https://img.shields.io/github/issues/anhostfr/compress.lol)](https://github.com/anhostfr/compress.lol/issues)
+[![GitHub issues](https://img.shields.io/github/issues/anhostfr/discordcompressor.com)](https://github.com/anhostfr/discordcompressor.com/issues)
 [![SvelteKit](https://img.shields.io/badge/SvelteKit-FF3E00?style=flat&logo=svelte&logoColor=white)](https://kit.svelte.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![FFmpeg](https://img.shields.io/badge/FFmpeg-007808?style=flat&logo=ffmpeg&logoColor=white)](https://ffmpeg.org/)
 
-> **Compress.lol** – _"Crushing file sizes, not dreams"_ ⚡  
+> **discordcompressor.com** – _"Crushing file sizes, not dreams"_ ⚡  
 > WebAssembly-powered video compression that runs entirely in your browser.
 
 ---
@@ -29,8 +29,8 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/anhostfr/compress.lol
-cd compress.lol
+git clone https://github.com/anhostfr/discordcompressor.com
+cd discordcompressor.com
 
 # Install dependencies
 npm install
