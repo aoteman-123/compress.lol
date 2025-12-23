@@ -27,7 +27,7 @@
     // State
     let ffmpeg = $state<FFmpeg | null>(null);
     let isLoaded = $state(false);
-    let engineLoadPromise = $state<Promise<void> | null>(null); // Store the loading promise
+    let engineLoadPromise = $state<Promise<void> | null>(null);
     let isProcessing = $state(false);
     let progress = $state(0);
     let selectedFile = $state<File | null>(null);
@@ -47,7 +47,6 @@
     let selectedTarget = $derived(compressionTargets.find(t => t.label === selectedTargetValue) || compressionTargets[1]);
 
     onMount(() => {
-        // Start loading immediately in background, store promise
         engineLoadPromise = initFFmpeg();
     });
 
@@ -61,12 +60,19 @@
           const _ffmpeg = new FFmpeg();
 
           _ffmpeg.on('log', ({ message }) => console.log('FFmpeg:', message));
+
           _ffmpeg.on('progress', ({ progress: prog }: ProgressEvent) => {
-             // Real progress (0-1) mapped to 10-100 (leaving 0-10 for initialization visual)
-             progress = Math.max(progress, 10 + Math.round(prog * 90));
+             // 算法：当前进度 + (FFmpeg进度 * 剩余可用空间)
+             // 这样无论模拟进度到了多少，都会平滑地向100%靠拢，绝不会溢出或倒退
+             const currentP = progress;
+             if (currentP >= 100) return;
+
+             const nextP = Math.round(currentP + (prog * (100 - currentP)));
+             if (nextP > progress && nextP < 100) {
+                progress = nextP;
+             }
           });
 
-          // Use unpkg as fallback
           const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
           await _ffmpeg.load({
              coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
@@ -99,42 +105,39 @@
        }
     };
 
-    // Simulate progress while waiting for engine
     const simulateLoading = async () => {
         const steps = [5, 15, 30, 45, 60, 70, 75];
         for (const step of steps) {
-            if (isLoaded) break; // If loaded, stop faking and jump to real logic
-            progress = step;
+            if (isLoaded || !isProcessing) break;
+            if (step > progress) progress = step;
             statusMessage = "Initializing Engine...";
-            await new Promise(r => setTimeout(r, 400)); // Delay between steps
+            await new Promise(r => setTimeout(r, 400));
         }
     };
 
     const compressVideo = async () => {
        if (!selectedFile) return;
+
+       // 重置状态：解决连续压缩进度超过100%的关键
        isProcessing = true;
-       progress = 2; // Start small
+       progress = 0;
        errorMessage = '';
        processedVideo = null;
        statusMessage = 'Preparing...';
 
        try {
-          // 1. If not loaded, run simulation AND wait for real promise
           if (!isLoaded && engineLoadPromise) {
-             const simulation = simulateLoading();
-             await engineLoadPromise; // Wait for the real background load to finish
-             // Once here, engine is ready.
+             simulateLoading();
+             await engineLoadPromise;
           }
 
           if (!ffmpeg) throw new Error("Engine not ready");
 
-          // 2. Real Processing Logic
           const inputName = 'input.mp4';
           const outputName = 'output.mp4';
 
           await ffmpeg.writeFile(inputName, await fetchFile(selectedFile));
 
-          // Bitrate Calculation
           const targetBitrateKbps = Math.floor(((selectedTarget.value * 8) / (videoDuration || 1) / 1000) * 0.88);
           const videoBitrate = Math.max(120, targetBitrateKbps - 64);
 
@@ -147,7 +150,7 @@
              '-preset', 'ultrafast',
              '-profile:v', 'baseline',
              '-level', '3.0',
-             '-vf', 'scale=iw*min(1\\,720/iw):-2,format=yuv420p', // Mobile Safe 720p
+             '-vf', 'scale=iw*min(1\\,720/iw):-2,format=yuv420p',
              '-c:a', 'aac', '-b:a', '64k', '-ac', '2',
              '-movflags', '+faststart',
              outputName
@@ -167,10 +170,9 @@
           errorMessage = isLoaded
             ? "Compression failed. File might be too complex for browser memory."
             : "Engine failed to initialize. Please check your connection.";
+          isProcessing = false;
        } finally {
-          // Only turn off processing flag if we failed. If success, keep showing "Done" state or reset manually.
-          if (errorMessage) isProcessing = false;
-          else isProcessing = false;
+          isProcessing = false;
        }
     };
 
