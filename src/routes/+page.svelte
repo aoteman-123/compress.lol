@@ -106,12 +106,12 @@
     };
 
     const simulateLoading = async () => {
-        const steps = [5, 15, 30, 45, 60, 70, 75,80,85,90,91,92,93,94,95,96,97,98];
+        const steps = [5, 15, 30, 45, 60, 70, 75,80,82,84,86,88,90,91,92,93,94,95,96,97,98];
         for (const step of steps) {
             if (isLoaded || !isProcessing) break;
             if (step > progress) progress = step;
             statusMessage = "Optimizing for Discord..."
-            await new Promise(r => setTimeout(r, 5000));
+            await new Promise(r => setTimeout(r, 8000));
         }
     };
 
