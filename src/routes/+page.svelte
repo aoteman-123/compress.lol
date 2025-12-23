@@ -111,7 +111,7 @@
             if (isLoaded || !isProcessing) break;
             if (step > progress) progress = step;
             statusMessage = "Optimizing for Discord..."
-            await new Promise(r => setTimeout(r, 8000));
+            await new Promise(r => setTimeout(r, 5000));
         }
     };
 
